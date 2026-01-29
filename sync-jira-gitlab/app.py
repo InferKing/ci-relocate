@@ -20,6 +20,9 @@ ALLOWED_ASSIGNEES = [x.strip() for x in os.getenv("ALLOWED_ASSIGNEES", "").split
 JIRA_TO_GITLAB_USER_ID = json.loads(os.getenv("JIRA_TO_GITLAB_USER_ID_JSON", "{}"))
 DONE_STATUSES = {x.strip() for x in os.getenv("DONE_STATUSES", "Done,Closed,Resolved").split(",") if x.strip()}
 
+REQUIRED_JIRA_LABELS = [x.strip() for x in os.getenv("REQUIRED_JIRA_LABELS", "").split(",") if x.strip()]
+LABEL_FILTERED = os.getenv("LABEL_FILTERED", "sync:filtered")
+
 LABEL_PREFIX_STATUS = os.getenv("LABEL_PREFIX_STATUS", "jira:status:")
 LABEL_OUT_OF_SCOPE = os.getenv("LABEL_OUT_OF_SCOPE", "sync:out-of-scope")
 LABEL_IN_SCOPE = os.getenv("LABEL_IN_SCOPE", "sync:in-scope")
@@ -150,6 +153,13 @@ def _build_description(jira_key: str, jira_desc: str) -> str:
         return f"{jira_desc}\n\n---\n{marker}"
     return f"{marker}"
 
+def _has_required_labels(data: Dict[str, Any]) -> bool:
+    if not REQUIRED_JIRA_LABELS:
+        return True
+
+    labels = set(data.get("labels") or [])
+    return any(label in labels for label in REQUIRED_JIRA_LABELS)
+
 def _labels_merge(jira_labels: List[str], status: str, in_scope: bool) -> List[str]:
     out = []
     for l in jira_labels:
@@ -264,6 +274,8 @@ async def jira_webhook(request: Request, x_sync_token: Optional[str] = Header(de
 
     data = _jira_extract(payload)
     jira_key = data["key"]
+    allowed_by_label = _has_required_labels(data)
+    link = _get_link(jira_key)
     if not jira_key:
         _mark_processed(fp)
         return WebhookResponse(ok=True, action="skip_no_key")
@@ -276,6 +288,33 @@ async def jira_webhook(request: Request, x_sync_token: Optional[str] = Header(de
     state_event = _state_event_from_status(data["status"])
     labels = _labels_merge(data["labels"], data["status"], in_scope)
     assignee_ids = _map_assignee_to_gitlab_ids(data["assignee"], in_scope)
+    
+    if not allowed_by_label:
+        if link is None:
+            _mark_processed(fp)
+            return WebhookResponse(ok=True, action="skip_no_unity_label", jira_key=jira_key)
+    
+        _, iid, _ = link
+    
+        title = data["summary"] or jira_key
+        description = _build_description(jira_key, data["description"] or "")
+        labels = _labels_merge(data["labels"], data["status"], False)
+    
+        if LABEL_FILTERED not in labels:
+            labels.append(LABEL_FILTERED)
+    
+        await _gitlab_update_issue(
+            iid=iid,
+            title=title,
+            description=description,
+            labels=labels,
+            assignee_ids=[],
+            state_event="close",
+        )
+    
+        _upsert_link(jira_key, iid, "filtered")
+        _mark_processed(fp)
+        return WebhookResponse(ok=True, action="updated_filtered", jira_key=jira_key, gitlab_iid=iid)
 
     if link is None:
         if not in_scope:
