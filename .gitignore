@@ -1,4 +1,4 @@
-.env
-__pycache__/
-*.pyc
-bot-state.json
+mr-echo/.env
+mr-echo/__pycache__/
+mr-echo/*.pyc
+mr-echo/bot-state.json
