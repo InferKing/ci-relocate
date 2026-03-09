@@ -4,7 +4,7 @@ import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 
 import httpx
@@ -15,19 +15,19 @@ import uvicorn
 UTC = timezone.utc
 
 
-def parse_bool(value: str | None, default: bool = False) -> bool:
+def parse_bool(value: Optional[str], default: bool = False) -> bool:
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def parse_csv(value: str | None) -> list[str]:
+def parse_csv(value: Optional[str]) -> List[str]:
     if not value:
         return []
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
-def parse_gitlab_datetime(value: str | None) -> datetime | None:
+def parse_gitlab_datetime(value: Optional[str]) -> Optional[datetime]:
     if not value:
         return None
     try:
@@ -45,7 +45,7 @@ class Settings:
     discord_webhook_url: str
     gitlab_url: str
     gitlab_token: str
-    gitlab_projects: list[str]
+    gitlab_projects: List[str]
     stale_after_hours: int
     remind_every_hours: int
     notify_draft_mrs: bool
@@ -91,7 +91,7 @@ class JsonStateStore:
         self._lock = asyncio.Lock()
         self._data = self._load()
 
-    def _load(self) -> dict[str, Any]:
+    def _load(self) -> Dict[str, Any]:
         if not self._path.exists():
             return {"notifications": {}}
         try:
@@ -103,7 +103,7 @@ class JsonStateStore:
         raw.setdefault("notifications", {})
         return raw
 
-    async def get_last_sent_at(self, key: str) -> datetime | None:
+    async def get_last_sent_at(self, key: str) -> Optional[datetime]:
         async with self._lock:
             value = self._data.get("notifications", {}).get(key)
         return parse_gitlab_datetime(value)
@@ -122,7 +122,7 @@ class DiscordClient:
     def __init__(self, webhook_url: str):
         self._webhook_url = webhook_url
 
-    async def post(self, payload: dict[str, Any]) -> None:
+    async def post(self, payload: Dict[str, Any]) -> None:
         async with httpx.AsyncClient(timeout=20) as client:
             response = await client.post(self._webhook_url, json=payload)
         if response.status_code >= 300:
@@ -134,7 +134,7 @@ class GitLabClient:
         self._base_url = base_url
         self._headers = {"PRIVATE-TOKEN": token}
 
-    async def list_open_merge_requests(self, project: str) -> list[dict[str, Any]]:
+    async def list_open_merge_requests(self, project: str) -> List[Dict[str, Any]]:
         encoded_project = quote(project, safe="")
         url = f"{self._base_url}/api/v4/projects/{encoded_project}/merge_requests"
         params = {
@@ -166,8 +166,8 @@ class StaleMergeRequestService:
         self._discord = discord
         self._state = state
 
-    async def run_check(self) -> dict[str, Any]:
-        stale_mrs: list[dict[str, Any]] = []
+    async def run_check(self) -> Dict[str, Any]:
+        stale_mrs: List[Dict[str, Any]] = []
         now = utc_now()
         stale_before = now - timedelta(hours=self._settings.stale_after_hours)
 
@@ -192,7 +192,7 @@ class StaleMergeRequestService:
             "checked_at": now.isoformat(),
         }
 
-    def _should_notify_for_mr(self, mr: dict[str, Any], stale_before: datetime) -> bool:
+    def _should_notify_for_mr(self, mr: Dict[str, Any], stale_before: datetime) -> bool:
         if mr.get("state") != "opened":
             return False
         if not self._settings.notify_draft_mrs and (mr.get("draft") or str(mr.get("title") or "").startswith("Draft:")):
@@ -203,18 +203,18 @@ class StaleMergeRequestService:
             return False
         return updated_at <= stale_before
 
-    async def _notification_due(self, mr: dict[str, Any], now: datetime) -> bool:
+    async def _notification_due(self, mr: Dict[str, Any], now: datetime) -> bool:
         last_sent_at = await self._state.get_last_sent_at(self._notification_key(mr))
         if last_sent_at is None:
             return True
         return now - last_sent_at >= timedelta(hours=self._settings.remind_every_hours)
 
-    def _notification_key(self, mr: dict[str, Any]) -> str:
+    def _notification_key(self, mr: Dict[str, Any]) -> str:
         project_id = str(mr.get("project_id") or "unknown")
         iid = str(mr.get("iid") or mr.get("id") or "unknown")
         return f"{project_id}:{iid}"
 
-    def _build_discord_payload(self, mr: dict[str, Any], now: datetime) -> dict[str, Any]:
+    def _build_discord_payload(self, mr: Dict[str, Any], now: datetime) -> Dict[str, Any]:
         updated_at = parse_gitlab_datetime(mr.get("updated_at"))
         created_at = parse_gitlab_datetime(mr.get("created_at"))
         author = mr.get("author") or {}
@@ -254,7 +254,7 @@ class StaleMergeRequestService:
 
         return {"content": None, "embeds": [embed]}
 
-    def _format_age(self, dt: datetime | None, now: datetime) -> str:
+    def _format_age(self, dt: Optional[datetime], now: datetime) -> str:
         if dt is None:
             return "unknown"
         delta = now - dt
@@ -275,12 +275,12 @@ app = FastAPI(title="mr-echo")
 
 
 @app.get("/health")
-async def health() -> dict[str, str]:
+async def health() -> Dict[str, str]:
     return {"status": "ok"}
 
 
 @app.post("/check")
-async def check_stale_mrs(x_trigger_token: str | None = Header(default=None)) -> dict[str, Any]:
+async def check_stale_mrs(x_trigger_token: Optional[str] = Header(default=None)) -> Dict[str, Any]:
     if settings.trigger_token and (x_trigger_token or "") != settings.trigger_token:
         raise HTTPException(status_code=401, detail="Bad trigger token")
     return await service.run_check()
