@@ -1,0 +1,9 @@
+**
+!app.py
+!config.py
+!discord_client.py
+!handlers.py
+!payloads.py
+!state.py
+!requirements.txt
+!Dockerfile

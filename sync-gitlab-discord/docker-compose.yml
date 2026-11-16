@@ -1,0 +1,25 @@
+services:
+  gitlab-discord-relay:
+    build: .
+    container_name: gitlab-discord-relay
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8081:8080"
+    environment:
+      DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:?Set DISCORD_WEBHOOK_URL in .env}
+      GITLAB_SECRET: ${GITLAB_SECRET:-}
+      ALLOWED_PUSH_REFS: ${ALLOWED_PUSH_REFS-refs/heads/develop,refs/heads/main}
+      ONLY_MR_NOTES: ${ONLY_MR_NOTES:-1}
+      IGNORE_SYSTEM_NOTES: ${IGNORE_SYSTEM_NOTES:-1}
+      STATE_DB_PATH: /app/data/relay-state.sqlite3
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      - relay-data:/app/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  relay-data:
